@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aplikasi Nota Florist</title>
+    <!-- Impor Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Impor Font Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Impor ikon (untuk menu, dll) -->
+    <script src="https://unpkg.com/feather-icons"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Sembunyikan panah di input number */
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+        /* Styling untuk sidebar */
+        #sidebar {
+            transition: transform 0.3s ease-in-out;
+        }
+        .sidebar-item {
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .sidebar-item:hover {
+            background-color: #4a5568; /* gray-700 */
+        }
+        .sidebar-item.active {
+            background-color: #4c51bf; /* indigo-700 */
+            font-weight: 600;
+        }
+        .sidebar-header {
+            padding: 1rem 1.5rem;
+            font-weight: 700;
+            font-size: 1.125rem; /* text-lg */
+            color: #e2e8f0; /* gray-300 */
+        }
+        /* Tambahkan style untuk header yang bisa diklik */
+        .sidebar-header-clickable {
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .sidebar-header-clickable:hover {
+            background-color: #4a5568; /* gray-700 */
+        }
+        /* Sembunyikan halaman secara default */
+        .page {
+            display: none;
+        }
+        .page.active {
+            display: block;
+        }
+        /* Custom modal for alerts */
+        #custom-modal {
+            transition: opacity 0.3s ease;
+        }
+        #custom-modal-content {
+            transition: transform 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- Input file tersembunyi untuk foto profil -->
+    <input type="file" id="profile-pic-input" class="hidden" accept="image/*">
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, setDoc, onSnapshot, collection, query, deleteDoc, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // Impor Firebase Storage
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        // --- KONFIGURASI APLIKASI ---
+
+        // Ambil konfigurasi dari variabel global
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-nota-app';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, storage, userId, notesCollectionRef; // Tambahkan 'storage'
+        let isEditMode = false;
+        let currentEditId = null;
+        let activePage = 'page-input-nota'; // Halaman default
+
+        // Daftar harga
+        const priceMap = {
+            'STD1T': 400000, 'STD2T': 500000, 'STD3T': 550000, 'STD4T': 600000, 'STD6T': 750000, 'STDFA': 700000, 'STDSEMI': 900000, 'STDFULL': 1200000,
+            'MDM1T': 500000, 'MDM2T': 600000, 'MDM3T': 600000, 'MDM4T': 750000, 'MDM6T': 1000000, 'MDMFA': 800000, 'MDMSEMI': 1200000, 'MDMFULL': 2000000,
+            'STDCUSTOM': 0, 'MDMCUSTOM': 0
+        };
+
+        // --- ELEMEN UI ---
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebar-overlay');
+        const menuButton = document.getElementById('menu-button');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const appTitle = document.getElementById('app-title');
+
+        const form = document.getElementById('nota-form');
+        const customPriceInput = document.getElementById('custom_price_input');
+        const hargaInput = document.getElementById('harga');
+        const typePilihanSelect = document.getElementById('type_pilihan');
+        const jumlahInput = document.getElementById('jumlah');
+        const ongkirInput = document.getElementById('ongkos_kirim');
+        const ongkirDisplay = document.getElementById('ongkir_display');
+        const totalDisplay = document.getElementById('total_display');
+        const noInvoiceInput = document.getElementById('no_invoice');
+        const tglOrderInput = document.getElementById('tgl_order');
+        const saveButton = document.getElementById('save-button');
+        const formTitle = document.getElementById('form-title');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const notaListContainer = document.getElementById('nota-list-container');
+        const modal = document.getElementById('custom-modal');
+        const modalMessage = document.getElementById('custom-modal-message');
+        const modalCloseBtn = document.getElementById('custom-modal-close');
+        // Elemen UI Foto Profil
+        const profilePicInput = document.getElementById('profile-pic-input');
+        const profilePicDisplay = document.getElementById('profile-pic-display');
+
+        // --- FUNGSI UTAMA ---
+
+        // Inisialisasi Firebase
+        function initializeFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                storage = getStorage(app); // Inisialisasi Storage
+                setLogLevel('Debug');
+                setupAuthListener();
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showModal("Gagal terhubung ke database.");
+            }
+        }
+
+        // Setup listener autentikasi
+        function setupAuthListener() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userIdDisplay.textContent = `ID: ${userId}`;
+                    notesCollectionRef = collection(db, 'artifacts', appId, 'users', userId, 'notes');
+                    // Muat data setelah auth siap
+                    loadNotes();
+                    loadProfilePic(); // Muat foto profil
+                    // Tampilkan halaman yang aktif
+                    showPage(activePage);
+                } else {
+                    // Jika tidak ada user, coba sign in
+                    await signIn();
+                }
+                loadingIndicator.style.display = 'none';
+            });
+        }
+
+        // Fungsi Sign In
+        async function signIn() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                showModal("Gagal melakukan autentikasi.");
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        // --- FUNGSI NAVIGASI ---
+        window.toggleSidebar = function() {
+            sidebar.classList.toggle('-translate-x-full');
+            sidebarOverlay.classList.toggle('hidden');
+        }
+
+        // --- FUNGSI BARU UNTUK SUBMENU ---
+        window.toggleSubmenu = function(submenuId) {
+            const submenu = document.getElementById(submenuId);
+            const header = document.querySelector(`[data-submenu-id="${submenuId}"]`);
+            const icon = header ? header.querySelector('.submenu-icon') : null;
+
+            if (submenu) {
+                submenu.classList.toggle('hidden');
+                const isHidden = submenu.classList.contains('hidden');
+                
+                if (icon) {
+                    // Ganti ikon chevron
+                    icon.setAttribute('data-feather', isHidden ? 'chevron-right' : 'chevron-down');
+                    feather.replace(); // Render ulang ikon
+                }
+            }
+        }
+
+        window.showPage = function(pageId) {
+            activePage = pageId;
+            // Sembunyikan semua halaman
+            document.querySelectorAll('.page').forEach(page => {
+                page.classList.remove('active');
+            });
+            // Tampilkan halaman yang dipilih
+            const activePageEl = document.getElementById(pageId);
+            if (activePageEl) {
+                activePageEl.classList.add('active');
+            }
+            // Update judul aplikasi
+            updateAppTitle(pageId);
+            // Tutup sidebar (di mobile)
+            if (window.innerWidth < 768) {
+                toggleSidebar();
+            }
+            // Update status aktif di sidebar
+            document.querySelectorAll('.sidebar-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.getAttribute('onclick').includes(pageId)) {
+                    item.classList.add('active');
+                }
+            });
+            // Reset form jika kembali ke halaman input
+            if (pageId === 'page-input-nota' && !isEditMode) {
+                resetForm();
+            }
+        }
+
+        function updateAppTitle(pageId) {
+            switch (pageId) {
+                case 'page-input-nota':
+                    appTitle.textContent = isEditMode ? 'Edit Nota' : 'Input Nota Baru';
+                    break;
+                case 'page-nota-tersimpan':
+                    appTitle.textContent = 'Nota Tersimpan';
+                    break;
+                case 'page-gaji':
+                    appTitle.textContent = 'Input Gaji Karyawan';
+                    break;
+                case 'page-lihat-gaji':
+                    appTitle.textContent = 'Lihat Gaji Karyawan';
+                    break;
+                case 'page-bayar-gaji':
+                    appTitle.textContent = 'Bayar Gaji Karyawan';
+                    break;
+                case 'page-data-karyawan':
+                    appTitle.textContent = 'Data Karyawan';
+                    break;
+                // --- PENGELUARAN ---
+                case 'page-belanja-suplayer':
+                    appTitle.textContent = 'Catat Belanja Suplayer';
+                    break;
+                case 'page-belanja-operasional':
+                    appTitle.textContent = 'Catat Belanja Operasional';
+                    break;
+                case 'page-data-suplayer':
+                    appTitle.textContent = 'Data Suplayer';
+                    break;
+                // --- REKAP ---
+                case 'page-rekap-gaji':
+                    appTitle.textContent = 'Rekap Pengeluaran Gaji';
+                    break;
+                case 'page-rekap-suplayer':
+                    appTitle.textContent = 'Rekap Pengeluaran Suplayer';
+                    break;
+                case 'page-rekap-operasional':
+                    appTitle.textContent = 'Rekap Pengeluaran Operasional';
+                    break;
+                case 'page-rekap-keseluruhan':
+                    appTitle.textContent = 'Rekap Keseluruhan';
+                    break;
+                // --- PENGATURAN BARU ---
+                case 'page-pengaturan-user':
+                    appTitle.textContent = 'Manajemen User';
+                    break;
+                case 'page-pengaturan-tampilan':
+                    appTitle.textContent = 'Pengaturan Tampilan';
+                    break;
+                case 'page-pengaturan-database':
+                    appTitle.textContent = 'Database & Backup';
+                    break;
+                default:
+                    appTitle.textContent = 'Aplikasi Nota';
+            }
+        }
+
+        // --- FUNGSI FORMATTER ---
+        function toRupiah(angka) {
+            if (isNaN(angka)) return "Rp 0";
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(angka);
+        }
+
+        function getCurrentDate() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = (now.getMonth() + 1).toString().padStart(2, '0');
+            const day = now.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        // --- FUNGSI MODAL (PENGGANTI ALERT) ---
+        function showModal(message) {
+            modalMessage.textContent = message;
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            modal.querySelector('#custom-modal-content').classList.add('scale-100');
+        }
+        modalCloseBtn.onclick = function() {
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            modal.querySelector('#custom-modal-content').classList.remove('scale-100');
+        }
+
+        // --- FUNGSI FORM ---
+        function generateInvoiceNumber() {
+            const now = new Date();
+            const year = now.getFullYear().toString().slice(-2);
+            const month = (now.getMonth() + 1).toString().padStart(2, '0');
+            const day = now.getDate().toString().padStart(2, '0');
+            const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+            return `INV-${year}${month}${day}-${randomPart}`;
+        }
+
+        function resetForm() {
+            form.reset();
+            tglOrderInput.value = getCurrentDate();
+            noInvoiceInput.value = generateInvoiceNumber();
+            customPriceInput.classList.add('hidden');
+            hargaInput.value = 0;
+            jumlahInput.value = 1;
+            ongkirInput.value = 0;
+            updateTotal();
+            isEditMode = false;
+            currentEditId = null;
+            saveButton.textContent = 'Simpan Nota';
+            saveButton.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+            saveButton.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+            formTitle.textContent = 'Input Nota Baru';
+            updateAppTitle('page-input-nota');
+        }
+
+        function updatePrice() {
+            const selectedType = typePilihanSelect.value;
+            if (selectedType.includes('CUSTOM')) {
+                customPriceInput.classList.remove('hidden');
+                hargaInput.value = parseFloat(document.getElementById('harga_custom').value) || 0;
+            } else {
+                customPriceInput.classList.add('hidden');
+                hargaInput.value = priceMap[selectedType] || 0;
+            }
+            updateTotal();
+        }
+
+        function updateTotal() {
+            const harga = parseFloat(hargaInput.value) || 0;
+            const jumlah = parseInt(jumlahInput.value) || 1;
+            const ongkir = parseFloat(ongkirInput.value) || 0;
+
+            const total = (harga * jumlah) + ongkir;
+
+            ongkirDisplay.textContent = ongkir === 0 ? 'Free Ongkir' : toRupiah(ongkir);
+            totalDisplay.textContent = toRupiah(total);
+        }
+
+        // --- FUNGSI CRUD FIRESTORE ---
+
+        async function saveNote(e) {
+            e.preventDefault();
+            if (!userId) {
+                showModal("Autentikasi gagal. Silakan muat ulang halaman.");
+                return;
+            }
+
+            // Kumpulkan data form
+            const noteData = {
+                namaCustomer: form.nama_customer.value,
+                typeCustomer: form.type_customer.value,
+                noInvoice: form.no_invoice.value,
+                tglOrder: form.tgl_order.value,
+                tglAcara: form.tgl_acara.value,
+                tglKirim: form.tgl_kirim.value,
+                jenisRangkaian: form.jenis_rangkaian.value,
+                typePilihan: form.type_pilihan.value,
+                harga: parseFloat(form.harga.value) || 0,
+                jumlah: parseInt(form.jumlah.value) || 1,
+                redaksiAcara: form.redaksi_acara.value,
+                dataPengirim: form.data_pengirim.value,
+                alamatKirim: form.alamat_kirim.value,
+                keterangan: form.keterangan.value,
+                ongkosKirim: parseFloat(form.ongkos_kirim.value) || 0,
+                jenisPembayaran: form.jenis_pembayaran.value,
+                total: (parseFloat(form.harga.value) || 0) * (parseInt(form.jumlah.value) || 1) + (parseFloat(form.ongkos_kirim.value) || 0),
+                // (File handling dilewati untuk saat ini, bisa ditambahkan nanti)
+                // fotoJadi: form.foto_jadi.files[0] ? form.foto_jadi.files[0].name : '',
+                // fotoLokasi: form.foto_lokasi.files[0] ? form.foto_lokasi.files[0].name : '',
+            };
+
+            // Validasi sederhana
+            if (!noteData.namaCustomer || !noteData.tglKirim || !noteData.typePilihan) {
+                showModal("Mohon isi field wajib: Nama Customer, Tgl Kirim, dan Type Pilihan.");
+                return;
+            }
+            
+            saveButton.disabled = true;
+            saveButton.textContent = 'Menyimpan...';
+
+            try {
+                if (isEditMode && currentEditId) {
+                    // Update data
+                    const noteRef = doc(db, 'artifacts', appId, 'users', userId, 'notes', currentEditId);
+                    noteData.updatedAt = serverTimestamp();
+                    await setDoc(noteRef, noteData, { merge: true });
+                    showModal('Nota berhasil diperbarui!');
+                } else {
+                    // Tambah data baru
+                    noteData.createdAt = serverTimestamp();
+                    await addDoc(notesCollectionRef, noteData);
+                    showModal('Nota berhasil disimpan!');
+                }
+                resetForm();
+                showPage('page-nota-tersimpan'); // Pindah ke halaman nota tersimpan
+            } catch (error) {
+                console.error("Error saving note: ", error);
+                showModal("Gagal menyimpan nota. Error: " + error.message);
+            } finally {
+                saveButton.disabled = false;
+                saveButton.textContent = isEditMode ? 'Update Nota' : 'Simpan Nota';
+            }
+        }
+
+        function loadNotes() {
+            if (!notesCollectionRef) return;
+
+            // Gunakan onSnapshot untuk real-time update
+            onSnapshot(query(notesCollectionRef), (snapshot) => {
+                if (snapshot.empty) {
+                    notaListContainer.innerHTML = '<p class="text-gray-500 text-center">Belum ada nota yang disimpan.</p>';
+                    return;
+                }
+
+                let html = '';
+                snapshot.forEach(doc => {
+                    const note = doc.data();
+                    const id = doc.id;
+                    html += `
+                        <div class="bg-white p-4 rounded-lg shadow-md mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center">
+                            <div class="flex-1 mb-4 sm:mb-0">
+                                <div class="flex justify-between items-center mb-2">
+                                    <p class="text-lg font-bold text-indigo-600">${note.noInvoice}</p>
+                                    <p class="text-sm font-medium text-gray-600">${note.tglOrder}</p>
+                                </div>
+                                <p class="text-xl font-semibold text-gray-800">${note.namaCustomer}</p>
+                                <p class="text-gray-600">${note.jenisRangkaian} - ${note.typePilihan}</p>
+                                <p class="text-lg font-bold text-green-600 mt-2">${toRupiah(note.total)}</p>
+                            </div>
+                            <div class="flex flex-col sm:flex-row sm:ml-4 gap-2 w-full sm:w-auto">
+                                <button onclick="previewNote('${id}')" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 text-sm font-medium w-full sm:w-auto">Preview</button>
+                                <button onclick="editNote('${id}')" class="bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 text-sm font-medium w-full sm:w-auto">Edit</button>
+                                <button onclick="printNote('${id}')" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 text-sm font-medium w-full sm:w-auto">Cetak/PDF</button>
+                                <button onclick="deleteNote('${id}')" class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 text-sm font-medium w-full sm:w-auto">Hapus</button>
+                            </div>
+                        </div>
+                    `;
+                });
+                notaListContainer.innerHTML = html;
+            }, (error) => {
+                console.error("Error loading notes: ", error);
+                notaListContainer.innerHTML = '<p class="text-red-500 text-center">Gagal memuat data nota.</p>';
+            });
+        }
+
+        window.editNote = async (id) => {
+            try {
+                const noteRef = doc(db, 'artifacts', appId, 'users', userId, 'notes', id);
+                const docSnap = await (await fetch(`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/artifacts/${appId}/users/${userId}/notes/${id}`)).json();
+
+                if (docSnap.fields) {
+                    const note = {};
+                    for (const [key, value] of Object.entries(docSnap.fields)) {
+                        note[key] = value.stringValue || value.integerValue || value.doubleValue || value.booleanValue;
+                    }
+
+                    // Isi form dengan data
+                    form.nama_customer.value = note.namaCustomer || '';
+                    form.type_customer.value = note.typeCustomer || 'Umum';
+                    form.no_invoice.value = note.noInvoice || '';
+                    form.tgl_order.value = note.tglOrder || '';
+                    form.tgl_acara.value = note.tglAcara || '';
+                    form.tgl_kirim.value = note.tglKirim || '';
+                    form.jenis_rangkaian.value = note.jenisRangkaian || 'Karangan Bunga Selamat';
+                    form.type_pilihan.value = note.typePilihan || '';
+                    form.harga.value = note.harga || 0;
+                    // Tampilkan custom price jika perlu
+                    if (note.typePilihan && note.typePilihan.includes('CUSTOM')) {
+                        customPriceInput.classList.remove('hidden');
+                        document.getElementById('harga_custom').value = note.harga;
+                    } else {
+                        customPriceInput.classList.add('hidden');
+                    }
+                    form.jumlah.value = note.jumlah || 1;
+                    form.redaksi_acara.value = note.redaksiAcara || '';
+                    form.data_pengirim.value = note.dataPengirim || '';
+                    form.alamat_kirim.value = note.alamatKirim || '';
+                    form.keterangan.value = note.keterangan || '';
+                    form.ongkos_kirim.value = note.ongkosKirim || 0;
+                    form.jenis_pembayaran.value = note.jenisPembayaran || 'Cash';
+
+                    updateTotal();
+
+                    // Set mode edit
+                    isEditMode = true;
+                    currentEditId = id;
+                    saveButton.textContent = 'Update Nota';
+                    saveButton.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                    saveButton.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
+                    formTitle.textContent = 'Edit Nota';
+
+                    // Pindah ke halaman input
+                    showPage('page-input-nota');
+                } else {
+                    showModal('Data nota tidak ditemukan.');
+                }
+            } catch (error) {
+                console.error("Error fetching note for edit: ", error);
+                showModal("Gagal mengambil data nota untuk diedit.");
+            }
+        };
+
+
+        window.deleteNote = async (id) => {
+            // Pengganti confirm()
+            showModal("Apakah Anda yakin ingin menghapus nota ini? (Fungsi konfirmasi belum ada, penghapusan dibatalkan)");
+            
+            // Logika penghapusan sementara dinonaktifkan
+            // Jika ingin mengaktifkan, ganti modal di atas dengan modal konfirmasi
+            
+            /*
+            // --- CONTOH LOGIKA DENGAN KONFIRMASI (perlu modal konfirmasi custom) ---
+            if (confirm("Apakah Anda yakin ingin menghapus nota ini?")) {
+                 try {
+                     const noteRef = doc(db, 'artifacts', appId, 'users', userId, 'notes', id);
+                     await deleteDoc(noteRef);
+                     showModal("Nota berhasil dihapus.");
+                 } catch (error) {
+                     console.error("Error deleting note: ", error);
+                     showModal("Gagal menghapus nota.");
+                 }
+            }
+            */
+        };
+        
+        window.previewNote = (id) => {
+            // Fungsi preview bisa dibuatkan modal khusus yang menampilkan semua detail
+            showModal(`Fitur "Preview" untuk nota ${id} belum diimplementasikan.`);
+        };
+        
+        window.printNote = (id) => {
+            // Fungsi cetak/PDF akan memformat data nota (bisa di modal) dan memanggil window.print()
+            showModal(`Fitur "Cetak/PDF" untuk nota ${id} belum diimplementasikan. Anda bisa menggunakan preview lalu print dari browser.`);
+            // Contoh implementasi sederhana:
+            // window.print();
+        };
+
+        // --- FUNGSI FOTO PROFIL ---
+        function loadProfilePic() {
+            if (!userId) return;
+            const profileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+            
+            // Dengarkan perubahan real-time (jika foto diganti di perangkat lain)
+            onSnapshot(profileRef, (doc) => {
+                if (doc.exists() && doc.data().profilePicUrl) {
+                    profilePicDisplay.src = doc.data().profilePicUrl;
+                    profilePicDisplay.classList.remove('p-8'); // Hapus padding jika ada gambar
+                } else {
+                    // Jika tidak ada URL, tampilkan ikon placeholder
+                    profilePicDisplay.src = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNhYmFkYmIiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMCAyMWE4IDggMCAwIDAtMTYgMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iNyIgcj0iNCIvPjwvc3ZnPg==";
+                    profilePicDisplay.classList.add('p-8'); // Tambahkan padding agar ikon terlihat bagus
+                }
+            }, (error) => {
+                console.error("Error loading profile picture: ", error);
+            });
+        }
+
+        window.editProfilePic = () => {
+            // Klik input file yang tersembunyi
+            profilePicInput.click();
+        };
+
+        async function uploadProfilePic(event) {
+            const file = event.target.files[0];
+            if (!file || !file.type.startsWith('image/') || !userId) {
+                return;
+            }
+
+            // 1. Tampilkan preview lokal
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                profilePicDisplay.src = e.target.result;
+                profilePicDisplay.classList.remove('p-8');
+            }
+            reader.readAsDataURL(file);
+
+            showModal("Mengunggah foto profil...");
+
+            try {
+                // 2. Tentukan path di Firebase Storage
+                // FIX: Mengubah path ke folder public yang diizinkan sesuai aturan keamanan
+                const storageRef = ref(storage, `artifacts/${appId}/public/profile-pics/${userId}-profile.jpg`);
+                
+                // 3. Upload file
+                await uploadBytes(storageRef, file);
+
+                // 4. Dapatkan URL download
+                const downloadURL = await getDownloadURL(storageRef);
+
+                // 5. Simpan URL ke Firestore
+                const profileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                await setDoc(profileRef, { profilePicUrl: downloadURL }, { merge: true });
+
+                showModal("Foto profil berhasil diperbarui.");
+
+            } catch (error) {
+                console.error("Error uploading profile pic: ", error);
+                showModal("Gagal mengunggah foto profil. " + error.message);
+                loadProfilePic(); // Kembalikan ke foto sebelumnya jika gagal
+            }
+        }
+
+
+        // --- INISIALISASI ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Terapkan ikon
+            feather.replace();
+
+            // Setup event listeners
+            menuButton.addEventListener('click', toggleSidebar);
+            sidebarOverlay.addEventListener('click', toggleSidebar);
+
+            // Event listener form
+            typePilihanSelect.addEventListener('change', updatePrice);
+            document.getElementById('harga_custom').addEventListener('input', updatePrice);
+            jumlahInput.addEventListener('input', updateTotal);
+            ongkirInput.addEventListener('input', updateTotal);
+            form.addEventListener('submit', saveNote);
+            
+            // Event listener untuk foto profil
+            profilePicInput.addEventListener('change', uploadProfilePic);
+
+            // Inisialisasi Firebase
+            if (Object.keys(firebaseConfig).length > 0) {
+                initializeFirebase();
+            } else {
+                loadingIndicator.textContent = "Konfigurasi Firebase tidak ditemukan.";
+                console.error("Firebase config is missing.");
+            }
+
+            // Inisialisasi halaman
+            resetForm(); // Set tanggal & invoice
+            showPage('page-input-nota'); // Tampilkan halaman input default
+        });
+
+    </script>
+
+    <!-- Header -->
+    <header class="bg-white shadow-md p-4 flex justify-between items-center fixed top-0 left-0 w-full z-20">
+        <button id="menu-button" class="text-gray-700 p-2 rounded-md hover:bg-gray-200">
+            <i data-feather="menu"></i>
+        </button>
+        <h1 id="app-title" class="text-xl md:text-2xl font-bold text-indigo-600">
+            Input Nota Baru
+        </h1>
+        <div class="text-xs text-gray-500" id="user-id-display">
+            Loading...
+        </div>
+    </header>
+
+    <!-- Sidebar Overlay (untuk mobile) -->
+    <div id="sidebar-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-20 hidden md:hidden"></div>
+
+    <!-- Sidebar -->
+    <nav id="sidebar" class="fixed top-0 left-0 h-full bg-gray-800 text-white w-64 transform -translate-x-full md:translate-x-0 z-30 md:pt-16">
+        <!-- Struktur Flexbox untuk mendorong PENGATURAN ke bawah -->
+        <div class="flex flex-col h-full pt-16 md:pt-0">
+
+            <!-- Top Section (Profile and Main Menus) - Menggunakan flex-grow agar dapat digulir jika terlalu panjang -->
+            <div class="flex-grow overflow-y-auto">
+
+                <!-- Foto Profil Ditambahkan - Padding atas dihilangkan -->
+                <div class="flex justify-center items-center pt-0 pb-4">
+                    <div class="relative w-24 h-24">
+                        <img id="profile-pic-display" alt="Profil" class="rounded-full w-24 h-24 object-cover bg-gray-600 border-2 border-gray-700 text-gray-400">
+                        <button onclick="editProfilePic()" class="absolute bottom-0 right-0 bg-indigo-600 text-white p-2 rounded-full shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-gray-800 transition-colors">
+                            <i data-feather="edit-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+                <!-- Akhir Foto Profil -->
+
+                <!-- Judul Aplikasi Ditambahkan -->
+                <div class="pb-4 px-4 text-center border-b border-gray-700">
+                    <h2 class="text-xl font-bold text-white tracking-wide">MFG APP BUNGA</h2>
+                </div>
+                <!-- Akhir Judul Aplikasi -->
+
+                <!-- Menu 1: ORDER -->
+                <div class="sidebar-header sidebar-header-clickable" onclick="toggleSubmenu('submenu-order')" data-submenu-id="submenu-order">
+                    <span>ORDER</span>
+                    <i data-feather="chevron-down" class="submenu-icon"></i>
+                </div>
+                <div id="submenu-order" class="pl-4"> <!-- Awalnya Buka -->
+                    <div class="sidebar-item active" onclick="showPage('page-input-nota')">
+                        Input Nota
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-nota-tersimpan')">
+                        Nota Tersimpan
+                    </div>
+                </div>
+
+                <!-- Menu 2: GAJI KARYAWAN -->
+                <div class="sidebar-header sidebar-header-clickable" onclick="toggleSubmenu('submenu-gaji')" data-submenu-id="submenu-gaji">
+                    <span>GAJI KARYAWAN</span>
+                    <i data-feather="chevron-right" class="submenu-icon"></i>
+                </div>
+                <div id="submenu-gaji" class="pl-4 hidden"> <!-- Awalnya Tutup -->
+                    <div class="sidebar-item" onclick="showPage('page-lihat-gaji')">
+                        Lihat Gaji Karyawan
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-bayar-gaji')">
+                        Bayar Gaji Karyawan
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-data-karyawan')">
+                        Data Karyawan
+                    </div>
+                </div>
+
+                <!-- Menu 3: PENGELUARAN -->
+                <div class="sidebar-header sidebar-header-clickable" onclick="toggleSubmenu('submenu-pengeluaran')" data-submenu-id="submenu-pengeluaran">
+                    <span>PENGELUARAN</span>
+                    <i data-feather="chevron-right" class="submenu-icon"></i>
+                </div>
+                <div id="submenu-pengeluaran" class="pl-4 hidden">
+                    <div class="sidebar-item" onclick="showPage('page-belanja-suplayer')">
+                        Belanja Suplayer
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-belanja-operasional')">
+                        Belanja Operasional
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-data-suplayer')">
+                        Data Suplayer
+                    </div>
+                </div>
+
+                <!-- Menu 4: REKAP -->
+                <div class="sidebar-header sidebar-header-clickable" onclick="toggleSubmenu('submenu-rekap')" data-submenu-id="submenu-rekap">
+                    <span>REKAP</span>
+                    <i data-feather="chevron-right" class="submenu-icon"></i>
+                </div>
+                <div id="submenu-rekap" class="pl-4 hidden"> <!-- Awalnya Tutup -->
+                    <div class="sidebar-item" onclick="showPage('page-rekap-gaji')">
+                        Pengeluaran Gaji
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-rekap-suplayer')">
+                        Pengeluaran Suplayer
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-rekap-operasional')">
+                        Pengeluaran Operasional
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-rekap-keseluruhan')">
+                        Rekap Keseluruhan
+                    </div>
+                </div>
+            
+            </div>
+            <!-- Akhir Top Section -->
+            
+            <!-- Menu 5: PENGATURAN (mt-auto mendorongnya ke bawah) -->
+            <div class="mt-auto border-t border-gray-700">
+                <div class="sidebar-header sidebar-header-clickable" onclick="toggleSubmenu('submenu-pengaturan')" data-submenu-id="submenu-pengaturan">
+                    <span>PENGATURAN</span>
+                    <i data-feather="chevron-right" class="submenu-icon"></i>
+                </div>
+                <div id="submenu-pengaturan" class="pl-4 hidden">
+                    <div class="sidebar-item" onclick="showPage('page-pengaturan-user')">
+                        Manajemen User
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-pengaturan-tampilan')">
+                        Pengaturan Tampilan
+                    </div>
+                    <div class="sidebar-item" onclick="showPage('page-pengaturan-database')">
+                        Database & Backup
+                    </div>
+                </div>
+            </div>
+            <!-- Akhir Menu PENGATURAN -->
+            
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="md:ml-64 pt-20 p-4 md:p-8">
+
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="text-center p-10">
+            <p class="text-lg text-gray-600">Memuat aplikasi...</p>
+        </div>
+
+        <!-- Halaman 1: Input Nota -->
+        <div id="page-input-nota" class="page">
+            <form id="nota-form" class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 id="form-title" class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Input Nota Baru</h2>
+                
+                <!-- Grid Kolom Modern -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+                    <!-- Kolom 1 -->
+                    <div class="space-y-4">
+                        <div>
+                            <label for="nama_customer" class="block text-sm font-medium text-gray-700">Nama Customer *</label>
+                            <input type="text" id="nama_customer" name="nama_customer" required class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="type_customer" class="block text-sm font-medium text-gray-700">Type Customer</label>
+                            <select id="type_customer" name="type_customer" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                                <option>Umum</option>
+                                <option>Agen</option>
+                                <option>Florist</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="no_invoice" class="block text-sm font-medium text-gray-700">No Invoice (Otomatis)</label>
+                            <input type="text" id="no_invoice" name="no_invoice" readonly class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-gray-100 cursor-not-allowed">
+                        </div>
+                        <div>
+                            <label for="tgl_order" class="block text-sm font-medium text-gray-700">Tgl Order (Otomatis)</Jp" class="block text-sm font-medium text-gray-700">
+                            <input type="date" id="tgl_order" name="tgl_order" readonly class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-gray-100 cursor-not-allowed">
+                        </div>
+                    </div>
+
+                    <!-- Kolom 2 -->
+                    <div class="space-y-4">
+                        <div>
+                            <label for="tgl_acara" class="block text-sm font-medium text-gray-700">Tgl Acara</label>
+                            <input type="date" id="tgl_acara" name="tgl_acara" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="tgl_kirim" class="block text-sm font-medium text-gray-700">Tgl Kirim *</label>
+                            <input type="date" id="tgl_kirim" name="tgl_kirim" required class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="jenis_rangkaian" class="block text-sm font-medium text-gray-700">Jenis Rangkaian</label>
+                            <select id="jenis_rangkaian" name="jenis_rangkaian" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                                <option>Karangan Bunga Selamat</option>
+                                <option>Karangan Bunga Duka</option>
+                                <option>Karangan Bunga Wedding</option>
+                                <option>Karangan Bunga Lain</option>
+                                <option>Karangan Bunga Bibit</option>
+                                <option>Standing Flower</option>
+                                <option>Bunga Meja</option>
+                                <option>Hand Bucket</option>
+                                <option>Cetak Banner</option>
+                                <option>Rangkaian Bunga Lain</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="type_pilihan" class="block text-sm font-medium text-gray-700">Type Yang Dipilih *</label>
+                            <select id="type_pilihan" name="type_pilihan" required class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="">-- Pilih Type --</option>
+                                <optgroup label="Standard (STD)">
+                                    <option value="STD1T">STD1T</option>
+                                    <option value="STD2T">STD2T</option>
+                                    <option value="STD3T">STD3T</option>
+                                    <option value="STD4T">STD4T</option>
+                                    <option value="STD6T">STD6T</option>
+                                    <option value="STDFA">STDFA</option>
+                                    <option value="STDSEMI">STDSEMI</option>
+                                    <option value="STDFULL">STDFULL</option>
+                                    <option value="STDCUSTOM">STDCUSTOM</option>
+                                </optgroup>
+                                <optgroup label="Medium (MDM)">
+                                    <option value="MDM1T">MDM1T</option>
+                                    <option value="MDM2T">MDM2T</option>
+                                    <option value="MDM3T">MDM3T</option>
+                                    <option value="MDM4T">MDM4T</option>
+                                    <option value="MDM6T">MDM6T</option>
+                                    <option value="MDMFA">MDMFA</option>
+                                    <option value="MDMSEMI">MDMSEMI</option>
+                                    <option value="MDMFULL">MDMFULL</option>
+                                    <option value="MDMCUSTOM">MDMCUSTOM</option>
+                                </optgroup>
+                            </select>
+                        </div>
+
+                        <!-- Input Harga Custom dipindah ke sini agar Kolom 3 lurus -->
+                        <div id="custom_price_input" class="hidden">
+                            <label for="harga_custom" class="block text-sm font-medium text-gray-700">Input Harga Manual (Rp)</label>
+                            <input type="number" id="harga_custom" name="harga_custom" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Contoh: 1500000">
+                        </div>
+                    </div>
+
+                    <!-- Kolom 3 (Harga & Pembayaran) -->
+                    <div class="space-y-4">
+                        <!-- Div harga custom sudah dipindah ke Kolom 2 -->
+                        <div>
+                            <label for="harga" class="block text-sm font-medium text-gray-700">Harga (Otomatis)</label>
+                            <input type="number" id="harga" name="harga" readonly class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-gray-100 cursor-not-allowed">
+                        </div>
+                        <div>
+                            <label for="jumlah" class="block text-sm font-medium text-gray-700">Jumlah</label>
+                            <input type="number" id="jumlah" name="jumlah" value="1" min="1" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="ongkos_kirim" class="block text-sm font-medium text-gray-700">Ongkos Kirim (Rp)</label>
+                            <input type="number" id="ongkos_kirim" name="ongkos_kirim" value="0" min="0" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Kosongi jika free">
+                        </div>
+                        <div>
+                            <label for="jenis_pembayaran" class="block text-sm font-medium text-gray-700">Jenis Pembayaran</label>
+                            <select id="jenis_pembayaran" name="jenis_pembayaran" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                                <option>Cash</option>
+                                <option>Debit</option>
+                                <option>Transfer</option>
+                                <option>Qris</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Baris Data Teks (Full Width) -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                    <div>
+                        <label for="redaksi_acara" class="block text-sm font-medium text-gray-700">Redaksi Acara</label>
+                        <textarea id="redaksi_acara" name="redaksi_acara" rows="3" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                    </div>
+                    <div>
+                        <label for="data_pengirim" class="block text-sm font-medium text-gray-700">Data Pengirim</label>
+                        <textarea id="data_pengirim" name="data_pengirim" rows="3" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                    </div>
+                    <div>
+                        <label for="alamat_kirim" class="block text-sm font-medium text-gray-700">Alamat Kirim</label>
+                        <textarea id="alamat_kirim" name="alamat_kirim" rows="3" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                    </div>
+                    <div>
+                        <label for="keterangan" class="block text-sm font-medium text-gray-700">Keterangan (Opsional)</label>
+                        <textarea id="keterangan" name="keterangan" rows="3" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                    </div>
+                </div>
+
+                <!-- Baris Foto (Full Width) -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                    <div>
+                        <label for="foto_jadi" class="block text-sm font-medium text-gray-700">Foto Jadi (Opsional)</label>
+                        <input type="file" id="foto_jadi" name="foto_jadi" accept="image/*" class="mt-1 w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+                    <div>
+                        <label for="foto_lokasi" class="block text-sm font-medium text-gray-700">Foto Lokasi (Opsional)</label>
+                        <input type="file" id="foto_lokasi" name="foto_lokasi" accept="image/*" class="mt-1 w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                    </div>
+                </div>
+
+                <!-- Total dan Tombol Simpan -->
+                <div class="mt-8 p-6 bg-indigo-50 rounded-lg flex flex-col md:flex-row justify-between items-center gap-4">
+                    <div class="text-center md:text-left">
+                        <div class="text-sm font-medium text-gray-600">Ongkos Kirim: <span id="ongkir_display" class="font-bold text-gray-800">Free Ongkir</span></div>
+                        <div class="text-lg font-bold text-gray-700">TOTAL</div>
+                        <div id="total_display" class="text-4xl font-extrabold text-indigo-600">Rp 0</div>
+                    </div>
+                    <button id="save-button" type="submit" class="w-full md:w-auto bg-indigo-600 text-white font-bold py-3 px-10 rounded-lg shadow-md hover:bg-indigo-700 transition-colors duration-300 text-lg">
+                        Simpan Nota
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Halaman 2: Nota Tersimpan -->
+        <div id="page-nota-tersimpan" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Daftar Nota Tersimpan</h2>
+                <div id="nota-list-container">
+                    <!-- Daftar nota akan dimuat di sini oleh JavaScript -->
+                    <p class="text-gray-500 text-center">Memuat nota...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Halaman 3: Input Gaji Karyawan (TETAP ADA sebagai target internal) -->
+        <div id="page-gaji" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Input Gaji Karyawan</h2>
+                <p class="text-gray-600">Fitur Input Gaji ini sedang dalam pengembangan.</p>
+            </div>
+        </div>
+        
+        <!-- Halaman 3b: Lihat Gaji Karyawan -->
+        <div id="page-lihat-gaji" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Lihat Gaji Karyawan</h2>
+                <p class="text-gray-600">Fitur ini akan menampilkan daftar dan rekap gaji karyawan.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 3c: Bayar Gaji Karyawan -->
+        <div id="page-bayar-gaji" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Bayar Gaji Karyawan</h2>
+                <p class="text-gray-600">Fitur ini digunakan untuk mencatat pembayaran gaji kepada karyawan.</p>
+            </div>
+        </div>
+        
+        <!-- Halaman 3d: Data Karyawan -->
+        <div id="page-data-karyawan" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Data Karyawan</h2>
+                <p class="text-gray-600">Fitur ini akan menampilkan daftar lengkap data karyawan beserta posisi mereka.</p>
+            </div>
+        </div>
+        
+        <!-- Halaman 3e: Belanja Suplayer -->
+        <div id="page-belanja-suplayer" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Catat Belanja Suplayer</h2>
+                <p class="text-gray-600">Form untuk mencatat pengeluaran belanja bahan baku/suplayer.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 3f: Belanja Operasional -->
+        <div id="page-belanja-operasional" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Catat Belanja Operasional</h2>
+                <p class="text-gray-600">Form untuk mencatat pengeluaran operasional, seperti listrik, air, atau ATK.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 3g: Data Suplayer -->
+        <div id="page-data-suplayer" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Data Suplayer</h2>
+                <p class="text-gray-600">Fitur untuk mengelola informasi kontak dan detail suplayer.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 4a: Pengeluaran Gaji -->
+        <div id="page-rekap-gaji" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Pengeluaran Gaji</h2>
+                <p class="text-gray-600">Fitur ini akan menampilkan rekap pengeluaran untuk Gaji Karyawan.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 4b: Pengeluaran Suplayer -->
+        <div id="page-rekap-suplayer" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Pengeluaran Suplayer</h2>
+                <p class="text-gray-600">Fitur ini akan menampilkan rekap pengeluaran untuk Suplayer/Bahan Baku.</p>
+            </div>
+        </div>
+
+        <!-- Halaman 4c: Pengeluaran Operasional -->
+        <div id="page-rekap-operasional" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Pengeluaran Operasional</h2>
+                <p class="text-gray-600">Fitur ini akan menampilkan rekap pengeluaran Operasional (listrik, air, sewa, dll.).</p>
+            </div>
+        </div>
+
+        <!-- Halaman 4d: Rekap Keseluruhan -->
+        <div id="page-rekap-keseluruhan" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Rekap Keseluruhan</h2>
+                <div class="space-y-4">
+                     <p class="text-gray-600">Fitur ini akan menyajikan Rekapitulasi Pendapatan Bersih (Pendapatan Kotor dikurangi semua jenis Pengeluaran).</p>
+                     <p class="text-sm text-indigo-600 font-semibold">Tujuan: Menampilkan pendapatan bersih per minggu/bulan.</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Halaman 5a: Manajemen User -->
+        <div id="page-pengaturan-user" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Manajemen User</h2>
+                <p class="text-gray-600">Mengelola pengguna yang dapat masuk ke aplikasi (login/logout/user data).</p>
+            </div>
+        </div>
+        
+        <!-- Halaman 5b: Pengaturan Tampilan -->
+        <div id="page-pengaturan-tampilan" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Pengaturan Tampilan</h2>
+                <p class="text-gray-600">Mengatur warna, tema, dan preferensi tampilan aplikasi.</p>
+            </div>
+        </div>
+        
+        <!-- Halaman 5c: Database & Backup -->
+        <div id="page-pengaturan-database" class="page">
+            <div class="bg-white p-8 md:p-10 rounded-lg shadow-lg max-w-7xl mx-auto">
+                <h2 class="text-2xl font-bold mb-6 text-gray-800 border-b pb-3">Database & Backup</h2>
+                <p class="text-gray-600">Pengaturan koneksi database, sinkronisasi, dan fitur pencadangan data.</p>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Custom Modal (Alert) -->
+    <div id="custom-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none">
+        <div id="custom-modal-content" class="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full transform scale-95">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Informasi</h3>
+            <p id="custom-modal-message" class="text-sm text-gray-600 mb-6">Ini adalah pesan.</p>
+            <div class="flex justify-end">
+                <button id="custom-modal-close" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm font-medium">
+                    Tutup
+                </button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
